@@ -106,6 +106,18 @@ function isOwnerConnected() {
   return ownerConnected && ownerSock !== null;
 }
 
+async function disconnectOwner() {
+  if (ownerSock) {
+    try { ownerSock.end(); } catch {}
+    ownerSock = null;
+    ownerConnected = false;
+  }
+}
+
+function setOwnerNumber(num) {
+  config.ownerWaNumber = num;
+}
+
 async function ownerJoinGroup(inviteCode) {
   if (!isOwnerConnected()) throw new Error('Owner WhatsApp not connected');
   return globalQueue.enqueueGroupJoin(async () => {
@@ -241,6 +253,7 @@ function setupGroupEventListeners(bot) {
 
 module.exports = {
   connectOwnerWA, getOwnerSock, isOwnerConnected,
+  disconnectOwner, setOwnerNumber,
   ownerJoinGroup, ownerSetGroupPfp, ownerLeaveGroup,
   ownerGetGroupMetadata, isOwnerAdminInGroup,
   setupGroupEventListeners,

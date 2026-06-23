@@ -22,6 +22,13 @@ const bot = new Telegraf(config.botToken);
 async function launch() {
   await connectDB();
 
+  const { Settings } = require('./database/models');
+  const savedNum = await Settings.findOne({ key: 'ownerWaNumber' });
+  if (savedNum?.value && !config.ownerWaNumber) {
+    config.ownerWaNumber = savedNum.value;
+    logger.info(`Owner WA number loaded from DB: +${savedNum.value}`);
+  }
+
   bot.use(sessionMiddleware());
   bot.use(rateLimitMiddleware());
 

@@ -1,9 +1,9 @@
-const { User, Session, AutoChangeJob, SupportTicket, ForceJoin, Channel, GroupPfpTask } = require('../database/models');
+const { User, Session, AutoChangeJob, SupportTicket, ForceJoin, Channel, GroupPfpTask, Settings } = require('../database/models');
 const K = require('../handlers/keyboards');
 const config = require('../config');
 const { setState, clearState } = require('../middleware/session');
-const { chunkArray } = require('../utils/helpers');
-const { isOwnerConnected, connectOwnerWA } = require('../services/ownerWhatsapp');
+const { chunkArray, isValidPhoneNumber, formatPhoneNumber } = require('../utils/helpers');
+const { isOwnerConnected, connectOwnerWA, disconnectOwner, setOwnerNumber } = require('../services/ownerWhatsapp');
 const logger = require('../utils/logger');
 
 async function panel(ctx) {
@@ -185,34 +185,113 @@ async function ownerWaStatus(ctx) {
     `*Owner WhatsApp Status*\n\n` +
     `Number: \`${num}\`\n` +
     `Status: ${connected ? 'Connected' : 'Disconnected'}\n\n` +
-    `${!connected ? 'Use "Pair Owner WA" to connect.' : 'The owner account is active and ready for group PFP tasks.'}`,
+    `${!connected ? 'Use "Set/Change Owner WA Number" to configure, then "Pair Owner WA" to connect.' : 'The owner account is active and ready for group PFP tasks.'}`,
     { parse_mode: 'Markdown', reply_markup: K.back('owner') }
   ).catch(() => {});
+}
+
+async function ownerWaSetPrompt(ctx) {
+  const current = config.ownerWaNumber;
+  ctx.setState({ step: 'o_wa_set_num' });
+  await ctx.editMessageText(
+    `*Set Owner WhatsApp Number*\n\n` +
+    `Current: ${current ? `\`+${current}\`` : '_Not set_'}\n\n` +
+    `Send the WhatsApp number with country code:\n_Example:_ \`+1234567890\``,
+    { parse_mode: 'Markdown', reply_markup: K.back('owner') }
+  ).catch(() => ctx.reply('Send owner WhatsApp number with country code:'));
+}
+
+async function ownerWaSetDo(ctx) {
+  clearState(ctx.from.id);
+  const phone = ctx.message.text?.trim();
+  if (!isValidPhoneNumber(phone)) {
+    return ctx.reply('Invalid number. Include country code, e.g. `+12345678900`', { parse_mode: 'Markdown' });
+  }
+  const num = formatPhoneNumber(phone);
+
+  if (isOwnerConnected()) {
+    await disconnectOwner();
+  }
+
+  await Settings.findOneAndUpdate(
+    { key: 'ownerWaNumber' },
+    { key: 'ownerWaNumber', value: num, updatedAt: new Date() },
+    { upsert: true }
+  );
+  config.ownerWaNumber = num;
+  setOwnerNumber(num);
+
+  await ctx.reply(
+    `*Owner WA number set to* \`+${num}\`\n\nNow use "Pair Owner WA" to connect this number.`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: [
+        [{ text: 'Pair Owner WA', callback_data: 'o_wa_pair' }],
+        [{ text: 'Back to Owner Panel', callback_data: 'owner' }],
+      ]},
+    }
+  );
 }
 
 async function ownerWaPair(ctx, bot) {
   if (!config.ownerWaNumber) {
     return ctx.editMessageText(
-      `*Owner WA Pairing*\n\nSet OWNER_WA_NUMBER in .env first.`,
-      { parse_mode: 'Markdown', reply_markup: K.back('owner') }
+      `*Owner WA Pairing*\n\nNo number configured.\nUse "Set/Change Owner WA Number" first.`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: [
+          [{ text: 'Set Owner WA Number', callback_data: 'o_wa_set' }],
+          [{ text: 'Back', callback_data: 'owner' }],
+        ]},
+      }
     ).catch(() => {});
   }
 
   if (isOwnerConnected()) {
     return ctx.editMessageText(
-      `*Owner WA*\n\nAlready connected as \`+${config.ownerWaNumber}\``,
-      { parse_mode: 'Markdown', reply_markup: K.back('owner') }
+      `*Owner WA*\n\nAlready connected as \`+${config.ownerWaNumber}\`\n\nTo re-pair, set a new number first.`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: [
+          [{ text: 'Change Number', callback_data: 'o_wa_set' }],
+          [{ text: 'Back', callback_data: 'owner' }],
+        ]},
+      }
     ).catch(() => {});
   }
 
-  const msg = await ctx.reply(`Connecting owner WA \`+${config.ownerWaNumber}\`...`, { parse_mode: 'Markdown' });
+  await ctx.editMessageText(
+    `*${config.bot.name} - Pair Owner WA*\n\`+${config.ownerWaNumber}\`\n\nChoose pairing method:`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: [
+        [{ text: 'Pair with Code', callback_data: 'o_wa_pair_code' }],
+        [{ text: 'Pair with QR', callback_data: 'o_wa_pair_qr' }],
+        [{ text: 'Cancel', callback_data: 'owner' }],
+      ]},
+    }
+  ).catch(() => {});
+}
+
+async function ownerWaPairCode(ctx, bot) {
+  const num = config.ownerWaNumber;
+  const wait = await ctx.editMessageText(`Connecting owner WA \`+${num}\` via pairing code...`, { parse_mode: 'Markdown' })
+    .catch(() => ctx.reply(`Connecting owner WA \`+${num}\` via pairing code...`, { parse_mode: 'Markdown' }));
 
   try {
     await connectOwnerWA({
       onCode: async code => {
-        await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null,
-          `*${config.bot.name} Owner WA Pairing Code:*\n\n\`\`\`\n${code}\n\`\`\`\n\n` +
-          `Enter this code in WhatsApp -> Linked Devices\nExpires in 60 seconds`,
+        const formatted = code.replace(/(.{4})/g, '$1-').replace(/-$/, '');
+        try { await ctx.telegram.deleteMessage(ctx.chat.id, wait.message_id); } catch {}
+        await ctx.reply(
+          `*${config.bot.name} Owner WA Pairing Code*\n\`+${num}\`\n\n` +
+          `\`${formatted}\`\n\n` +
+          `*Steps:*\n` +
+          `1. Open WhatsApp on the owner phone\n` +
+          `2. Settings → Linked Devices\n` +
+          `3. Link a Device → Link with phone number\n` +
+          `4. Enter the code above\n\n` +
+          `_Code expires in 60 seconds_`,
           { parse_mode: 'Markdown' }
         );
       },
@@ -220,17 +299,58 @@ async function ownerWaPair(ctx, bot) {
         const { setupGroupEventListeners } = require('../services/ownerWhatsapp');
         setupGroupEventListeners(bot);
         await ctx.reply(
-          `*Owner WA Connected!*\n\`+${config.ownerWaNumber}\`\n\nGroup PFP features are now active.`,
+          `*Owner WA Connected!*\n\`+${num}\`\n\nGroup PFP features are now active.`,
           { parse_mode: 'Markdown', reply_markup: K.back('owner') }
         );
       },
     });
   } catch (e) {
-    logger.error('Owner WA pair: ' + e.message);
-    await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null,
-      `Owner WA pairing failed: ${e.message}`,
-      { reply_markup: K.back('owner') }
-    ).catch(() => {});
+    logger.error('Owner WA pair code: ' + e.message);
+    try { await ctx.telegram.deleteMessage(ctx.chat.id, wait.message_id); } catch {}
+    await ctx.reply(`Owner WA pairing failed: ${e.message}`, { reply_markup: K.back('owner') });
+  }
+}
+
+async function ownerWaPairQR(ctx, bot) {
+  const QRCode = require('qrcode');
+  const num = config.ownerWaNumber;
+  const wait = await ctx.editMessageText(`Generating QR code for owner WA \`+${num}\`...`, { parse_mode: 'Markdown' })
+    .catch(() => ctx.reply(`Generating QR code for owner WA \`+${num}\`...`, { parse_mode: 'Markdown' }));
+
+  let qrSent = false;
+
+  try {
+    await connectOwnerWA({
+      onQR: async qr => {
+        if (qrSent) return;
+        qrSent = true;
+        try {
+          const qrBuffer = await QRCode.toBuffer(qr, { width: 512, margin: 2 });
+          try { await ctx.telegram.deleteMessage(ctx.chat.id, wait.message_id); } catch {}
+          await ctx.replyWithPhoto(
+            { source: qrBuffer },
+            {
+              caption: `*${config.bot.name} Owner WA QR Code*\n\`+${num}\`\n\nScan in WhatsApp → Linked Devices`,
+              parse_mode: 'Markdown',
+            }
+          );
+        } catch (e) {
+          logger.warn('Owner QR send failed: ' + e.message);
+        }
+      },
+      onConnected: async () => {
+        const { setupGroupEventListeners } = require('../services/ownerWhatsapp');
+        setupGroupEventListeners(bot);
+        await ctx.reply(
+          `*Owner WA Connected!*\n\`+${num}\`\n\nGroup PFP features are now active.`,
+          { parse_mode: 'Markdown', reply_markup: K.back('owner') }
+        );
+      },
+    });
+  } catch (e) {
+    logger.error('Owner WA pair QR: ' + e.message);
+    try { await ctx.telegram.deleteMessage(ctx.chat.id, wait.message_id); } catch {}
+    await ctx.reply(`Owner WA QR pairing failed: ${e.message}`, { reply_markup: K.back('owner') });
   }
 }
 
@@ -244,5 +364,6 @@ module.exports = {
   panel, stats, users, broadcastPrompt, broadcastDo,
   fjPanel, fjAddPrompt, fjAddDo, fjDel,
   channelPanel, channelAddPrompt, channelAddDo, channelDel,
-  ownerWaStatus, ownerWaPair, restart,
+  ownerWaStatus, ownerWaSetPrompt, ownerWaSetDo,
+  ownerWaPair, ownerWaPairCode, ownerWaPairQR, restart,
 };
