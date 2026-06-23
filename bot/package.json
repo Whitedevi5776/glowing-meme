@@ -11,7 +11,7 @@
     "lint": "echo 'no lint configured'"
   },
   "dependencies": {
-    "@rexxhayanasi/elaina-baileys": "1.3.1",
+    "@crysnovax/baileys": "^2.6.4",
     "axios": "^1.7.9",
     "bullmq": "^5.34.8",
     "dotenv": "^16.4.7",

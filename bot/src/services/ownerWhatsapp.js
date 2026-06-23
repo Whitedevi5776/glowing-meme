@@ -1,8 +1,7 @@
 const fs = require('fs');
-const sharp = require('sharp');
 const config = require('../config');
 const logger = require('../utils/logger');
-const { getUserSessionDir, cleanCorruptedSession, isSessionDirValid } = require('../utils/storage');
+const { getUserSessionDir, cleanCorruptedSession, isSessionDirValid, deleteDir } = require('../utils/storage');
 const { sleep } = require('../utils/helpers');
 const { globalQueue } = require('../utils/taskQueue');
 
@@ -13,7 +12,7 @@ let intentionalDisconnect = false;
 const OWNER_TID = '__owner__';
 
 async function getLib() {
-  return require('@rexxhayanasi/elaina-baileys');
+  return require('@crysnovax/baileys');
 }
 
 async function connectOwnerWA({ onCode, onQR, onConnected, onDisconnected } = {}) {
@@ -32,7 +31,14 @@ async function connectOwnerWA({ onCode, onQR, onConnected, onDisconnected } = {}
   } = await getLib();
 
   const dir = getUserSessionDir(OWNER_TID, config.ownerWaNumber);
-  cleanCorruptedSession(dir);
+  const isFreshPairing = (onCode || onQR);
+
+  if (isFreshPairing) {
+    deleteDir(dir);
+    fs.mkdirSync(dir, { recursive: true });
+  } else {
+    cleanCorruptedSession(dir);
+  }
 
   const { state, saveCreds } = await useMultiFileAuthState(dir);
   const { version } = await fetchLatestBaileysVersion();
@@ -48,34 +54,36 @@ async function connectOwnerWA({ onCode, onQR, onConnected, onDisconnected } = {}
     generateHighQualityLinkPreview: false,
     syncFullHistory: false,
     logger: logger.child({ level: 'silent' }),
-    connectTimeoutMs: 30_000,
+    connectTimeoutMs: 60_000,
   });
 
   ownerSock = sock;
   sock.ev.on('creds.update', saveCreds);
 
-  if (onCode && !state.creds.registered) {
-    const requestPairing = async (attempt = 1) => {
-      if (ownerConnected) return;
-      try {
-        await sleep(3000 + (attempt - 1) * 2000);
-        if (ownerConnected) return;
-        const code = await sock.requestPairingCode(config.ownerWaNumber.replace(/\D/g, ''));
-        if (onCode) await onCode(code);
-      } catch (e) {
-        logger.warn(`Owner pairing attempt ${attempt}: ${e.message}`);
-        if (attempt < 3 && !ownerConnected) {
-          await sleep(2000);
-          return requestPairing(attempt + 1);
-        }
-      }
-    };
-    requestPairing();
-  }
+  const isPairing = !state.creds.registered;
+  let isRetrying = false;
+  let ownerPairingAttempt = 0;
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-    if (qr && onQR) {
-      await onQR(qr);
+    // When we receive the first QR event, the socket is ready for pairing.
+    if (qr && isPairing && !ownerConnected) {
+      if (onCode) {
+        ownerPairingAttempt++;
+        if (ownerPairingAttempt === 1) {
+          try {
+            const cleanNumber = config.ownerWaNumber.replace(/\D/g, '');
+            logger.info(`Requesting owner pairing code for ${cleanNumber}...`);
+            const code = await sock.requestPairingCode(cleanNumber);
+            logger.info(`Owner pairing code generated: ${code}`);
+            await onCode(code);
+          } catch (e) {
+            logger.warn(`Owner pairing code request failed: ${e.message}`);
+            if (onQR) await onQR(qr);
+          }
+        }
+      } else if (onQR) {
+        await onQR(qr);
+      }
     }
     if (connection === 'open') {
       ownerConnected = true;
@@ -83,14 +91,23 @@ async function connectOwnerWA({ onCode, onQR, onConnected, onDisconnected } = {}
       if (onConnected) onConnected(sock);
     }
     if (connection === 'close') {
-      ownerConnected = false;
-      ownerSock = null;
       const code = lastDisconnect?.error?.output?.statusCode;
       logger.info(`Owner WA closed (code=${code})`);
+
+      // Skip close handler during controlled retry or expected 401 during pairing
+      if (isRetrying) return;
+      if (isPairing && !ownerConnected && (code === 401 || code === DisconnectReason.badSession)) {
+        logger.info('Expected 401 during owner pairing, waiting for code request...');
+        return;
+      }
+
+      ownerConnected = false;
+      ownerSock = null;
 
       if (!intentionalDisconnect && code !== DisconnectReason.loggedOut && code !== 401) {
         logger.info('Owner WA reconnecting in 10s...');
         await sleep(10_000);
+        if (intentionalDisconnect) return;
         connectOwnerWA({ onQR, onConnected, onDisconnected }).catch(e =>
           logger.error('Owner WA reconnect failed: ' + e.message)
         );
@@ -133,15 +150,8 @@ async function ownerJoinGroup(inviteCode) {
 
 async function ownerSetGroupPfp(groupJid, imagePath) {
   if (!isOwnerConnected()) throw new Error('Owner WhatsApp not connected');
-  const { jidNormalizedUser, S_WHATSAPP_NET } = await getLib();
   const raw = fs.readFileSync(imagePath);
-  const img = await sharp(raw).jpeg({ quality: 100 }).toBuffer();
-  const targetJid = jidNormalizedUser(groupJid);
-  await ownerSock.query({
-    tag: 'iq',
-    attrs: { target: targetJid, to: S_WHATSAPP_NET, type: 'set', xmlns: 'w:profile:picture' },
-    content: [{ tag: 'picture', attrs: { type: 'image' }, content: img }],
-  });
+  await ownerSock.updateProfilePicture(groupJid, raw, { hd: true });
 }
 
 async function ownerLeaveGroup(groupJid) {

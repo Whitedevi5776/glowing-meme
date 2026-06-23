@@ -1,6 +1,6 @@
 const fs = require('fs');
 const sharp = require('sharp');
-const { getUserSessionDir, isSessionDirValid, cleanCorruptedSession } = require('../utils/storage');
+const { getUserSessionDir, isSessionDirValid, cleanCorruptedSession, deleteDir } = require('../utils/storage');
 const { Session } = require('../database/models');
 const config = require('../config');
 const logger = require('../utils/logger');
@@ -11,7 +11,7 @@ const active = new Map();
 let _lib = null;
 async function lib() {
   if (_lib) return _lib;
-  _lib = require('@rexxhayanasi/elaina-baileys');
+  _lib = require('@crysnovax/baileys');
   return _lib;
 }
 
@@ -25,7 +25,17 @@ async function createWhatsAppSession(telegramId, whatsappNumber, { onCode, onQR,
   } = await lib();
 
   const dir = getUserSessionDir(telegramId, whatsappNumber);
-  cleanCorruptedSession(dir);
+  const isFreshPairing = (onCode || onQR);
+
+  // For fresh pairing, wipe session completely so creds.me is null.
+  // Otherwise validateConnection sends a LOGIN node (since creds.me exists
+  // from prior requestPairingCode call) and server rejects with 401 in <1s.
+  if (isFreshPairing) {
+    deleteDir(dir);
+    fs.mkdirSync(dir, { recursive: true });
+  } else {
+    cleanCorruptedSession(dir);
+  }
 
   const { state, saveCreds } = await useMultiFileAuthState(dir);
   const { version } = await fetchLatestBaileysVersion();
@@ -41,8 +51,8 @@ async function createWhatsAppSession(telegramId, whatsappNumber, { onCode, onQR,
     generateHighQualityLinkPreview: false,
     syncFullHistory: false,
     logger: logger.child({ level: 'silent' }),
-    connectTimeoutMs: 30_000,
-    defaultQueryTimeoutMs: 30_000,
+    connectTimeoutMs: 60_000,
+    defaultQueryTimeoutMs: 60_000,
     retryRequestDelayMs: 500,
     maxMsgRetryCount: 3,
   });
@@ -53,37 +63,35 @@ async function createWhatsAppSession(telegramId, whatsappNumber, { onCode, onQR,
 
   let pairingRequested = false;
   let connectionResolved = false;
-
-  if (onCode && !state.creds.registered) {
-    const requestPairing = async (attempt = 1) => {
-      if (pairingRequested || connectionResolved) return;
-      try {
-        await sleep(3000 + (attempt - 1) * 2000);
-        if (connectionResolved) return;
-
-        const cleanNumber = whatsappNumber.replace(/\D/g, '');
-        const code = await sock.requestPairingCode(cleanNumber);
-        pairingRequested = true;
-        if (onCode) await onCode(code);
-      } catch (e) {
-        logger.warn(`Pairing code attempt ${attempt}: ${e.message}`);
-        if (attempt < 3 && !connectionResolved) {
-          await sleep(2000);
-          return requestPairing(attempt + 1);
-        }
-        if (onQR) {
-          logger.info('Pairing code failed, falling back to QR');
-        }
-      }
-    };
-    requestPairing();
-  }
+  let isRetrying = false;
+  let pairingAttempt = 0;
+  const isPairing = !state.creds.registered;
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    if (qr && onQR && !pairingRequested && !connectionResolved) {
-      await onQR(qr);
+    // When we receive the first QR event, the socket is ready for pairing.
+    // For code-based pairing, call requestPairingCode at this point.
+    if (qr && isPairing && !pairingRequested && !connectionResolved) {
+      if (onCode) {
+        pairingAttempt++;
+        if (pairingAttempt === 1) {
+          try {
+            const cleanNumber = whatsappNumber.replace(/\D/g, '');
+            logger.info(`Requesting pairing code for ${cleanNumber}...`);
+            const code = await sock.requestPairingCode(cleanNumber);
+            pairingRequested = true;
+            logger.info(`Pairing code generated for ${whatsappNumber}: ${code}`);
+            await onCode(code);
+          } catch (e) {
+            logger.warn(`Pairing code request failed: ${e.message}`);
+            // Let QR fallback work if code fails
+            if (onQR) await onQR(qr);
+          }
+        }
+      } else if (onQR) {
+        await onQR(qr);
+      }
     }
 
     if (connection === 'open') {
@@ -101,10 +109,18 @@ async function createWhatsAppSession(telegramId, whatsappNumber, { onCode, onQR,
     }
 
     if (connection === 'close') {
-      connectionResolved = true;
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const reason = lastDisconnect?.error?.output?.payload?.error;
       logger.info(`WA closed: ${whatsappNumber} (code=${statusCode}, reason=${reason})`);
+
+      // Skip close handler during controlled retry or expected 401 during pairing
+      if (isRetrying) return;
+      if (isPairing && !pairingRequested && (statusCode === 401 || statusCode === DisconnectReason.badSession)) {
+        logger.info(`Expected 401 during pairing for ${whatsappNumber}, waiting for pairing code request...`);
+        return;
+      }
+
+      connectionResolved = true;
       active.delete(key);
 
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut
@@ -180,22 +196,8 @@ async function toFullHDBuffer(imagePath) {
 }
 
 async function setFullHDProfilePicture(sock, jid, imagePath) {
-  const { jidNormalizedUser, S_WHATSAPP_NET } = await lib();
-  const img = await toFullHDBuffer(imagePath);
-  let targetJid;
-  if (jidNormalizedUser(jid) !== jidNormalizedUser(sock.user.id)) {
-    targetJid = jidNormalizedUser(jid);
-  }
-  await sock.query({
-    tag: 'iq',
-    attrs: {
-      ...(targetJid ? { target: targetJid } : {}),
-      to: S_WHATSAPP_NET,
-      type: 'set',
-      xmlns: 'w:profile:picture',
-    },
-    content: [{ tag: 'picture', attrs: { type: 'image' }, content: img }],
-  });
+  const raw = fs.readFileSync(imagePath);
+  await sock.updateProfilePicture(jid, raw, { hd: true });
 }
 
 async function setProfilePicture(tid, num, imagePath) {
