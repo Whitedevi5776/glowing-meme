@@ -54,12 +54,13 @@ async function downloadPinterest(url) {
 
 async function downloadWithAPI(url, platform) {
   const apiEndpoints = [
-    `https://api.cobalt.tools/api/json`,
+    { url: 'https://api.cobalt.tools/api/json', type: 'cobalt' },
+    { url: 'https://co.wuk.sh/api/json', type: 'cobalt' },
   ];
 
-  for (const apiUrl of apiEndpoints) {
+  for (const api of apiEndpoints) {
     try {
-      const response = await axios.post(apiUrl, {
+      const response = await axios.post(api.url, {
         url,
         vCodec: 'h264',
         vQuality: 'max',
@@ -94,7 +95,7 @@ async function downloadWithAPI(url, platform) {
         };
       }
     } catch (e) {
-      logger.warn(`API ${apiUrl} failed: ${e.message}`);
+      logger.warn(`API ${api.url} failed: ${e.message}`);
     }
   }
 
@@ -107,23 +108,34 @@ async function downloadTikTok(url) {
 
   try {
     const response = await axios.get(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36' },
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
       timeout: 15000,
-      maxRedirects: 5,
+      maxRedirects: 10,
     });
     const html = response.data;
 
-    const videoMatch = html.match(/"playAddr":"([^"]+)"/);
-    if (videoMatch) {
-      return {
-        platform: 'TikTok',
-        type: 'video',
-        media: [{ url: videoMatch[1].replace(/\\u002F/g, '/'), type: 'video', title: 'TikTok Video' }],
-      };
+    const patterns = [
+      /"playAddr":"([^"]+)"/,
+      /"downloadAddr":"([^"]+)"/,
+      /"play_addr":\s*\{[^}]*"url_list":\s*\["([^"]+)"/,
+    ];
+    for (const pattern of patterns) {
+      const match = html.match(pattern);
+      if (match) {
+        return {
+          platform: 'TikTok',
+          type: 'video',
+          media: [{ url: match[1].replace(/\\u002F/g, '/').replace(/\\u0026/g, '&'), type: 'video', title: 'TikTok Video' }],
+        };
+      }
     }
   } catch {}
 
-  return { error: 'Could not download TikTok video. Try again later.' };
+  return { error: 'Could not download TikTok video. The video may be private or the link may have expired. Try again later.' };
 }
 
 async function downloadInstagram(url) {

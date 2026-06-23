@@ -7,6 +7,40 @@ const path = require('path');
 const fs = require('fs');
 const logger = require('../utils/logger');
 
+async function sendMediaItem(ctx, item, platform, dir) {
+  const ext = item.type === 'video' ? '.mp4' : '.jpg';
+  const localPath = path.join(dir, `dl_${Date.now()}_${Math.random().toString(36).slice(2, 6)}${ext}`);
+
+  if (item.type === 'video') {
+    try {
+      await downloadFile(item.url, localPath);
+      await ctx.replyWithVideo({ source: localPath }, { caption: item.title || `${platform} Video` });
+      fs.unlinkSync(localPath);
+      return true;
+    } catch (e) {
+      logger.warn(`Video local send: ${e.message}`);
+      if (fs.existsSync(localPath)) fs.unlinkSync(localPath);
+      return false;
+    }
+  }
+
+  try {
+    await ctx.replyWithPhoto(item.url, { caption: item.title || `${platform} Image` });
+    return true;
+  } catch {
+    try {
+      await downloadFile(item.url, localPath);
+      await ctx.replyWithPhoto({ source: localPath }, { caption: item.title || '' });
+      fs.unlinkSync(localPath);
+      return true;
+    } catch (e2) {
+      logger.warn(`Photo local send fallback: ${e2.message}`);
+      if (fs.existsSync(localPath)) fs.unlinkSync(localPath);
+      return false;
+    }
+  }
+}
+
 async function start(ctx) {
   await ctx.editMessageText(
     `*${config.bot.name} - Universal Media Downloader*\n\n` +
@@ -60,6 +94,7 @@ async function handleUrl(ctx, url, bot) {
     let sent = 0;
     const maxSend = Math.min(media.length, config.limits.maxDownloadImages);
     const sentIndices = new Set();
+    const dir = getDownloadDir(String(ctx.from.id));
 
     if (maxSend > 1) {
       const photos = [];
@@ -88,66 +123,16 @@ async function handleUrl(ctx, url, bot) {
       for (let i = 0; i < maxSend; i++) {
         if (sentIndices.has(i)) continue;
         const item = media[i];
-        try {
-          if (item.type === 'video') {
-            await ctx.replyWithVideo(item.url, { caption: item.title || `${result.platform} Video` });
-          } else {
-            await ctx.replyWithPhoto(item.url, { caption: item.title || `${result.platform} Image` });
-          }
-          sentIndices.add(i);
-          sent++;
-        } catch (e) {
-          logger.warn(`Send media ${i}: ${e.message}`);
-          try {
-            const dir = getDownloadDir(String(ctx.from.id));
-            const ext = item.type === 'video' ? '.mp4' : '.jpg';
-            const localPath = path.join(dir, `dl_${Date.now()}${ext}`);
-            await downloadFile(item.url, localPath);
-            if (item.type === 'video') {
-              await ctx.replyWithVideo({ source: localPath }, { caption: item.title || '' });
-            } else {
-              await ctx.replyWithPhoto({ source: localPath }, { caption: item.title || '' });
-            }
-            sentIndices.add(i);
-            sent++;
-            fs.unlinkSync(localPath);
-          } catch (e2) {
-            logger.warn(`Local send fallback: ${e2.message}`);
-          }
-        }
+        const ok = await sendMediaItem(ctx, item, result.platform, dir);
+        if (ok) { sentIndices.add(i); sent++; }
       }
     } else {
       const item = media[0];
-      try {
-        if (item.type === 'video') {
-          await ctx.replyWithVideo(item.url, {
-            caption: `*${result.platform}*\n${item.title || ''}`,
-            parse_mode: 'Markdown',
-          });
-        } else {
-          await ctx.replyWithPhoto(item.url, {
-            caption: `*${result.platform}*\n${item.title || ''}`,
-            parse_mode: 'Markdown',
-          });
-        }
+      const ok = await sendMediaItem(ctx, item, result.platform, dir);
+      if (ok) {
         sent = 1;
-      } catch {
-        try {
-          const dir = getDownloadDir(String(ctx.from.id));
-          const ext = item.type === 'video' ? '.mp4' : '.jpg';
-          const localPath = path.join(dir, `dl_${Date.now()}${ext}`);
-          await downloadFile(item.url, localPath);
-
-          if (item.type === 'video') {
-            await ctx.replyWithVideo({ source: localPath }, { caption: item.title || '' });
-          } else {
-            await ctx.replyWithPhoto({ source: localPath }, { caption: item.title || '' });
-          }
-          sent = 1;
-          fs.unlinkSync(localPath);
-        } catch (e2) {
-          await ctx.reply(`Could not send the media. URL: ${item.url}`, { reply_markup: K.back('download') });
-        }
+      } else {
+        await ctx.reply(`Could not download the media. Please try again later.`, { reply_markup: K.back('download') });
       }
     }
 
