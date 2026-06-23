@@ -62,6 +62,7 @@ async function connectOwnerWA({ onCode, onQR, onConnected, onDisconnected } = {}
   sock.ev.on('creds.update', saveCreds);
 
   const isPairing = !state.creds.registered;
+  let isRetrying = false;
 
   if (onCode && isPairing) {
     const requestPairing = async (attempt = 1) => {
@@ -75,6 +76,8 @@ async function connectOwnerWA({ onCode, onQR, onConnected, onDisconnected } = {}
         logger.warn(`Owner pairing attempt ${attempt}: ${e.message}`);
         if (attempt < 3 && !ownerConnected) {
           logger.info(`Retrying owner pairing (attempt ${attempt + 1})...`);
+          isRetrying = true;
+          intentionalDisconnect = true;
           try { sock.end(); } catch {}
           ownerSock = null;
           deleteDir(dir);
@@ -101,7 +104,8 @@ async function connectOwnerWA({ onCode, onQR, onConnected, onDisconnected } = {}
       const code = lastDisconnect?.error?.output?.statusCode;
       logger.info(`Owner WA closed (code=${code})`);
 
-      // During pairing, 401 is expected — don't clean up
+      // Skip close handler during controlled retry or expected 401 during pairing
+      if (isRetrying) return;
       if (isPairing && !ownerConnected && (code === 401 || code === DisconnectReason.badSession)) {
         logger.info('Expected 401 during owner pairing, waiting for code request...');
         return;

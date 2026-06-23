@@ -63,21 +63,19 @@ async function createWhatsAppSession(telegramId, whatsappNumber, { onCode, onQR,
 
   let pairingRequested = false;
   let connectionResolved = false;
+  let isRetrying = false;
   const isPairing = !state.creds.registered;
 
   if (onCode && isPairing) {
     const requestPairing = async (attempt = 1) => {
       if (pairingRequested || connectionResolved) return;
       try {
-        // Wait for WS to open and noise handshake to complete.
         // With clean creds (creds.me=null), server sends pair-device QR refs
         // instead of 401, keeping the socket open for code request.
         await sleep(3000);
         if (connectionResolved) return;
 
         const cleanNumber = whatsappNumber.replace(/\D/g, '');
-        // Pass empty string to force random code generation
-        // (default "ELAINAMD" in elaina-baileys is used as literal code)
         const code = await sock.requestPairingCode(cleanNumber, '');
         pairingRequested = true;
         if (onCode) await onCode(code);
@@ -85,9 +83,9 @@ async function createWhatsAppSession(telegramId, whatsappNumber, { onCode, onQR,
         logger.warn(`Pairing code attempt ${attempt}: ${e.message}`);
         if (attempt < 3) {
           logger.info(`Retrying pairing for ${whatsappNumber} (attempt ${attempt + 1})...`);
+          isRetrying = true;
           active.delete(key);
           try { sock.end(); } catch {}
-          // Wipe session again for clean retry
           deleteDir(dir);
           fs.mkdirSync(dir, { recursive: true });
           await sleep(2000);
@@ -124,8 +122,8 @@ async function createWhatsAppSession(telegramId, whatsappNumber, { onCode, onQR,
       const reason = lastDisconnect?.error?.output?.payload?.error;
       logger.info(`WA closed: ${whatsappNumber} (code=${statusCode}, reason=${reason})`);
 
-      // During pairing, 401 is expected (creds not yet registered).
-      // Don't treat it as a fatal close — allow pairing retries.
+      // Skip close handler during controlled retry or expected 401 during pairing
+      if (isRetrying) return;
       if (isPairing && !pairingRequested && (statusCode === 401 || statusCode === DisconnectReason.badSession)) {
         logger.info(`Expected 401 during pairing for ${whatsappNumber}, waiting for pairing code request...`);
         return;
