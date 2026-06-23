@@ -1,5 +1,4 @@
 const fs = require('fs');
-const sharp = require('sharp');
 const config = require('../config');
 const logger = require('../utils/logger');
 const { getUserSessionDir, cleanCorruptedSession, isSessionDirValid, deleteDir } = require('../utils/storage');
@@ -13,7 +12,7 @@ let intentionalDisconnect = false;
 const OWNER_TID = '__owner__';
 
 async function getLib() {
-  return require('@rexxhayanasi/elaina-baileys');
+  return require('@crysnovax/baileys');
 }
 
 async function connectOwnerWA({ onCode, onQR, onConnected, onDisconnected } = {}) {
@@ -70,7 +69,7 @@ async function connectOwnerWA({ onCode, onQR, onConnected, onDisconnected } = {}
       try {
         await sleep(3000);
         if (ownerConnected) return;
-        const code = await sock.requestPairingCode(config.ownerWaNumber.replace(/\D/g, ''), '');
+        const code = await sock.requestPairingCode(config.ownerWaNumber.replace(/\D/g, ''), config.bot.pairingName);
         if (onCode) await onCode(code);
       } catch (e) {
         logger.warn(`Owner pairing attempt ${attempt}: ${e.message}`);
@@ -160,15 +159,8 @@ async function ownerJoinGroup(inviteCode) {
 
 async function ownerSetGroupPfp(groupJid, imagePath) {
   if (!isOwnerConnected()) throw new Error('Owner WhatsApp not connected');
-  const { jidNormalizedUser, S_WHATSAPP_NET } = await getLib();
   const raw = fs.readFileSync(imagePath);
-  const img = await sharp(raw).jpeg({ quality: 100 }).toBuffer();
-  const targetJid = jidNormalizedUser(groupJid);
-  await ownerSock.query({
-    tag: 'iq',
-    attrs: { target: targetJid, to: S_WHATSAPP_NET, type: 'set', xmlns: 'w:profile:picture' },
-    content: [{ tag: 'picture', attrs: { type: 'image' }, content: img }],
-  });
+  await ownerSock.updateProfilePicture(groupJid, raw, { hd: true });
 }
 
 async function ownerLeaveGroup(groupJid) {

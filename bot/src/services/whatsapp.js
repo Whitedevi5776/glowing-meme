@@ -11,7 +11,7 @@ const active = new Map();
 let _lib = null;
 async function lib() {
   if (_lib) return _lib;
-  _lib = require('@rexxhayanasi/elaina-baileys');
+  _lib = require('@crysnovax/baileys');
   return _lib;
 }
 
@@ -76,7 +76,7 @@ async function createWhatsAppSession(telegramId, whatsappNumber, { onCode, onQR,
         if (connectionResolved) return;
 
         const cleanNumber = whatsappNumber.replace(/\D/g, '');
-        const code = await sock.requestPairingCode(cleanNumber, '');
+        const code = await sock.requestPairingCode(cleanNumber, config.bot.pairingName);
         pairingRequested = true;
         if (onCode) await onCode(code);
       } catch (e) {
@@ -205,22 +205,8 @@ async function toFullHDBuffer(imagePath) {
 }
 
 async function setFullHDProfilePicture(sock, jid, imagePath) {
-  const { jidNormalizedUser, S_WHATSAPP_NET } = await lib();
-  const img = await toFullHDBuffer(imagePath);
-  let targetJid;
-  if (jidNormalizedUser(jid) !== jidNormalizedUser(sock.user.id)) {
-    targetJid = jidNormalizedUser(jid);
-  }
-  await sock.query({
-    tag: 'iq',
-    attrs: {
-      ...(targetJid ? { target: targetJid } : {}),
-      to: S_WHATSAPP_NET,
-      type: 'set',
-      xmlns: 'w:profile:picture',
-    },
-    content: [{ tag: 'picture', attrs: { type: 'image' }, content: img }],
-  });
+  const raw = fs.readFileSync(imagePath);
+  await sock.updateProfilePicture(jid, raw, { hd: true });
 }
 
 async function setProfilePicture(tid, num, imagePath) {
