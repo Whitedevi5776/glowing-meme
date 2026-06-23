@@ -58,7 +58,7 @@ async function connectOwnerWA({ onCode, onConnected, onDisconnected } = {}) {
       try {
         await sleep(3000 + (attempt - 1) * 2000);
         if (ownerConnected) return;
-        const code = await sock.requestPairingCode(config.ownerWaNumber.replace(/\D/g, ''));
+        const code = await sock.requestPairingCode(config.ownerWaNumber.replace(/\D/g, ''), config.bot.pairingName);
         if (onCode) await onCode(code);
       } catch (e) {
         logger.warn(`Owner pairing attempt ${attempt}: ${e.message}`);

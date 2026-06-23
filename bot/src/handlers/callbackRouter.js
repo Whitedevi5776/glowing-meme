@@ -49,6 +49,9 @@ async function route(ctx, bot) {
 
     /* ── Pairing ── */
     if (data === 'pair_wa') return pa.start(ctx);
+    if (data.startsWith('pair_delete:')) return pa.deleteAndRepair(ctx, data.slice(12));
+    if (data.startsWith('pair_code:')) return pa.doPairCode(ctx, data.slice(10), bot);
+    if (data.startsWith('pair_qr:')) return pa.doPairQR(ctx, data.slice(8), bot);
 
     /* ── Paired accounts ── */
     if (data === 'paired') return ac.pairedList(ctx);
