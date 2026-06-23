@@ -11,7 +11,10 @@ function rateLimitMiddleware() {
     ts.push(now);
     timestamps.set(id, ts);
     if (ts.length > MAX) {
-      return ctx.answerCbQuery('Slow down! Please wait a moment.', { show_alert: true }).catch(() => {});
+      if (ctx.callbackQuery) {
+        return ctx.answerCbQuery('Slow down! Please wait a moment.', { show_alert: true }).catch(() => {});
+      }
+      return;
     }
     return next();
   };
