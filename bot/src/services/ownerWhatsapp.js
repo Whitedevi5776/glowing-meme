@@ -8,6 +8,7 @@ const { globalQueue } = require('../utils/taskQueue');
 
 let ownerSock = null;
 let ownerConnected = false;
+let intentionalDisconnect = false;
 
 const OWNER_TID = '__owner__';
 
@@ -15,7 +16,8 @@ async function getLib() {
   return require('@rexxhayanasi/elaina-baileys');
 }
 
-async function connectOwnerWA({ onCode, onConnected, onDisconnected } = {}) {
+async function connectOwnerWA({ onCode, onQR, onConnected, onDisconnected } = {}) {
+  intentionalDisconnect = false;
   if (!config.ownerWaNumber) {
     logger.warn('OWNER_WA_NUMBER not set - owner WhatsApp features disabled');
     return null;
@@ -71,7 +73,10 @@ async function connectOwnerWA({ onCode, onConnected, onDisconnected } = {}) {
     requestPairing();
   }
 
-  sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
+  sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+    if (qr && onQR) {
+      await onQR(qr);
+    }
     if (connection === 'open') {
       ownerConnected = true;
       logger.info(`Owner WA connected: ${config.ownerWaNumber}`);
@@ -83,10 +88,10 @@ async function connectOwnerWA({ onCode, onConnected, onDisconnected } = {}) {
       const code = lastDisconnect?.error?.output?.statusCode;
       logger.info(`Owner WA closed (code=${code})`);
 
-      if (code !== DisconnectReason.loggedOut && code !== 401) {
+      if (!intentionalDisconnect && code !== DisconnectReason.loggedOut && code !== 401) {
         logger.info('Owner WA reconnecting in 10s...');
         await sleep(10_000);
-        connectOwnerWA({ onConnected, onDisconnected }).catch(e =>
+        connectOwnerWA({ onQR, onConnected, onDisconnected }).catch(e =>
           logger.error('Owner WA reconnect failed: ' + e.message)
         );
       }
@@ -107,6 +112,7 @@ function isOwnerConnected() {
 }
 
 async function disconnectOwner() {
+  intentionalDisconnect = true;
   if (ownerSock) {
     try { ownerSock.end(); } catch {}
     ownerSock = null;
