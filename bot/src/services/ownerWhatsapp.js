@@ -54,19 +54,25 @@ async function connectOwnerWA({ onCode, onQR, onConnected, onDisconnected } = {}
   ownerSock = sock;
   sock.ev.on('creds.update', saveCreds);
 
-  if (onCode && !state.creds.registered) {
+  const isPairing = !state.creds.registered;
+
+  if (onCode && isPairing) {
     const requestPairing = async (attempt = 1) => {
       if (ownerConnected) return;
       try {
-        await sleep(3000 + (attempt - 1) * 2000);
+        await sleep(2000 + (attempt - 1) * 2000);
         if (ownerConnected) return;
-        const code = await sock.requestPairingCode(config.ownerWaNumber.replace(/\D/g, ''));
+        const code = await sock.requestPairingCode(config.ownerWaNumber.replace(/\D/g, ''), '');
         if (onCode) await onCode(code);
       } catch (e) {
         logger.warn(`Owner pairing attempt ${attempt}: ${e.message}`);
         if (attempt < 3 && !ownerConnected) {
+          logger.info(`Retrying owner pairing (attempt ${attempt + 1})...`);
+          try { sock.end(); } catch {}
+          ownerSock = null;
           await sleep(2000);
-          return requestPairing(attempt + 1);
+          if (ownerConnected) return;
+          return connectOwnerWA({ onCode, onQR, onConnected, onDisconnected });
         }
       }
     };
@@ -83,14 +89,22 @@ async function connectOwnerWA({ onCode, onQR, onConnected, onDisconnected } = {}
       if (onConnected) onConnected(sock);
     }
     if (connection === 'close') {
-      ownerConnected = false;
-      ownerSock = null;
       const code = lastDisconnect?.error?.output?.statusCode;
       logger.info(`Owner WA closed (code=${code})`);
+
+      // During pairing, 401 is expected — don't clean up
+      if (isPairing && !ownerConnected && (code === 401 || code === DisconnectReason.badSession)) {
+        logger.info('Expected 401 during owner pairing, waiting for code request...');
+        return;
+      }
+
+      ownerConnected = false;
+      ownerSock = null;
 
       if (!intentionalDisconnect && code !== DisconnectReason.loggedOut && code !== 401) {
         logger.info('Owner WA reconnecting in 10s...');
         await sleep(10_000);
+        if (intentionalDisconnect) return;
         connectOwnerWA({ onQR, onConnected, onDisconnected }).catch(e =>
           logger.error('Owner WA reconnect failed: ' + e.message)
         );

@@ -53,26 +53,32 @@ async function createWhatsAppSession(telegramId, whatsappNumber, { onCode, onQR,
 
   let pairingRequested = false;
   let connectionResolved = false;
+  const isPairing = !state.creds.registered;
 
-  if (onCode && !state.creds.registered) {
+  if (onCode && isPairing) {
     const requestPairing = async (attempt = 1) => {
       if (pairingRequested || connectionResolved) return;
       try {
-        await sleep(3000 + (attempt - 1) * 2000);
+        // Wait for WS to open and noise handshake to complete
+        await sleep(2000 + (attempt - 1) * 2000);
         if (connectionResolved) return;
 
         const cleanNumber = whatsappNumber.replace(/\D/g, '');
-        const code = await sock.requestPairingCode(cleanNumber);
+        // Pass empty string to force random code generation
+        // (default "ELAINAMD" in elaina-baileys is used as literal code)
+        const code = await sock.requestPairingCode(cleanNumber, '');
         pairingRequested = true;
         if (onCode) await onCode(code);
       } catch (e) {
         logger.warn(`Pairing code attempt ${attempt}: ${e.message}`);
         if (attempt < 3 && !connectionResolved) {
+          // Reconnect with fresh socket for retry
+          logger.info(`Retrying pairing for ${whatsappNumber} (attempt ${attempt + 1})...`);
+          active.delete(key);
+          try { sock.end(); } catch {}
           await sleep(2000);
-          return requestPairing(attempt + 1);
-        }
-        if (onQR) {
-          logger.info('Pairing code failed, falling back to QR');
+          if (connectionResolved) return;
+          return createWhatsAppSession(telegramId, whatsappNumber, { onCode, onQR, onConnected, onDisconnected });
         }
       }
     };
@@ -101,10 +107,18 @@ async function createWhatsAppSession(telegramId, whatsappNumber, { onCode, onQR,
     }
 
     if (connection === 'close') {
-      connectionResolved = true;
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const reason = lastDisconnect?.error?.output?.payload?.error;
       logger.info(`WA closed: ${whatsappNumber} (code=${statusCode}, reason=${reason})`);
+
+      // During pairing, 401 is expected (creds not yet registered).
+      // Don't treat it as a fatal close — allow pairing retries.
+      if (isPairing && !pairingRequested && (statusCode === 401 || statusCode === DisconnectReason.badSession)) {
+        logger.info(`Expected 401 during pairing for ${whatsappNumber}, waiting for pairing code request...`);
+        return;
+      }
+
+      connectionResolved = true;
       active.delete(key);
 
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut
