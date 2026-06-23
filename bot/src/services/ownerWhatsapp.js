@@ -2,7 +2,7 @@ const fs = require('fs');
 const sharp = require('sharp');
 const config = require('../config');
 const logger = require('../utils/logger');
-const { getUserSessionDir, cleanCorruptedSession, isSessionDirValid } = require('../utils/storage');
+const { getUserSessionDir, cleanCorruptedSession, isSessionDirValid, deleteDir } = require('../utils/storage');
 const { sleep } = require('../utils/helpers');
 const { globalQueue } = require('../utils/taskQueue');
 
@@ -32,7 +32,14 @@ async function connectOwnerWA({ onCode, onQR, onConnected, onDisconnected } = {}
   } = await getLib();
 
   const dir = getUserSessionDir(OWNER_TID, config.ownerWaNumber);
-  cleanCorruptedSession(dir);
+  const isFreshPairing = (onCode || onQR);
+
+  if (isFreshPairing) {
+    deleteDir(dir);
+    fs.mkdirSync(dir, { recursive: true });
+  } else {
+    cleanCorruptedSession(dir);
+  }
 
   const { state, saveCreds } = await useMultiFileAuthState(dir);
   const { version } = await fetchLatestBaileysVersion();
@@ -48,7 +55,7 @@ async function connectOwnerWA({ onCode, onQR, onConnected, onDisconnected } = {}
     generateHighQualityLinkPreview: false,
     syncFullHistory: false,
     logger: logger.child({ level: 'silent' }),
-    connectTimeoutMs: 30_000,
+    connectTimeoutMs: 60_000,
   });
 
   ownerSock = sock;
@@ -60,7 +67,7 @@ async function connectOwnerWA({ onCode, onQR, onConnected, onDisconnected } = {}
     const requestPairing = async (attempt = 1) => {
       if (ownerConnected) return;
       try {
-        await sleep(2000 + (attempt - 1) * 2000);
+        await sleep(3000);
         if (ownerConnected) return;
         const code = await sock.requestPairingCode(config.ownerWaNumber.replace(/\D/g, ''), '');
         if (onCode) await onCode(code);
@@ -70,6 +77,8 @@ async function connectOwnerWA({ onCode, onQR, onConnected, onDisconnected } = {}
           logger.info(`Retrying owner pairing (attempt ${attempt + 1})...`);
           try { sock.end(); } catch {}
           ownerSock = null;
+          deleteDir(dir);
+          fs.mkdirSync(dir, { recursive: true });
           await sleep(2000);
           if (ownerConnected) return;
           return connectOwnerWA({ onCode, onQR, onConnected, onDisconnected });

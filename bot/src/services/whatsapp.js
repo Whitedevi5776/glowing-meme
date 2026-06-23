@@ -1,6 +1,6 @@
 const fs = require('fs');
 const sharp = require('sharp');
-const { getUserSessionDir, isSessionDirValid, cleanCorruptedSession } = require('../utils/storage');
+const { getUserSessionDir, isSessionDirValid, cleanCorruptedSession, deleteDir } = require('../utils/storage');
 const { Session } = require('../database/models');
 const config = require('../config');
 const logger = require('../utils/logger');
@@ -25,7 +25,17 @@ async function createWhatsAppSession(telegramId, whatsappNumber, { onCode, onQR,
   } = await lib();
 
   const dir = getUserSessionDir(telegramId, whatsappNumber);
-  cleanCorruptedSession(dir);
+  const isFreshPairing = (onCode || onQR);
+
+  // For fresh pairing, wipe session completely so creds.me is null.
+  // Otherwise validateConnection sends a LOGIN node (since creds.me exists
+  // from prior requestPairingCode call) and server rejects with 401 in <1s.
+  if (isFreshPairing) {
+    deleteDir(dir);
+    fs.mkdirSync(dir, { recursive: true });
+  } else {
+    cleanCorruptedSession(dir);
+  }
 
   const { state, saveCreds } = await useMultiFileAuthState(dir);
   const { version } = await fetchLatestBaileysVersion();
@@ -41,8 +51,8 @@ async function createWhatsAppSession(telegramId, whatsappNumber, { onCode, onQR,
     generateHighQualityLinkPreview: false,
     syncFullHistory: false,
     logger: logger.child({ level: 'silent' }),
-    connectTimeoutMs: 30_000,
-    defaultQueryTimeoutMs: 30_000,
+    connectTimeoutMs: 60_000,
+    defaultQueryTimeoutMs: 60_000,
     retryRequestDelayMs: 500,
     maxMsgRetryCount: 3,
   });
@@ -59,8 +69,10 @@ async function createWhatsAppSession(telegramId, whatsappNumber, { onCode, onQR,
     const requestPairing = async (attempt = 1) => {
       if (pairingRequested || connectionResolved) return;
       try {
-        // Wait for WS to open and noise handshake to complete
-        await sleep(2000 + (attempt - 1) * 2000);
+        // Wait for WS to open and noise handshake to complete.
+        // With clean creds (creds.me=null), server sends pair-device QR refs
+        // instead of 401, keeping the socket open for code request.
+        await sleep(3000);
         if (connectionResolved) return;
 
         const cleanNumber = whatsappNumber.replace(/\D/g, '');
@@ -71,13 +83,14 @@ async function createWhatsAppSession(telegramId, whatsappNumber, { onCode, onQR,
         if (onCode) await onCode(code);
       } catch (e) {
         logger.warn(`Pairing code attempt ${attempt}: ${e.message}`);
-        if (attempt < 3 && !connectionResolved) {
-          // Reconnect with fresh socket for retry
+        if (attempt < 3) {
           logger.info(`Retrying pairing for ${whatsappNumber} (attempt ${attempt + 1})...`);
           active.delete(key);
           try { sock.end(); } catch {}
+          // Wipe session again for clean retry
+          deleteDir(dir);
+          fs.mkdirSync(dir, { recursive: true });
           await sleep(2000);
-          if (connectionResolved) return;
           return createWhatsAppSession(telegramId, whatsappNumber, { onCode, onQR, onConnected, onDisconnected });
         }
       }
