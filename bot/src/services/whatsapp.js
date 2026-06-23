@@ -62,7 +62,7 @@ async function createWhatsAppSession(telegramId, whatsappNumber, { onCode, onQR,
         if (connectionResolved) return;
 
         const cleanNumber = whatsappNumber.replace(/\D/g, '');
-        const code = await sock.requestPairingCode(cleanNumber, config.bot.pairingName);
+        const code = await sock.requestPairingCode(cleanNumber);
         pairingRequested = true;
         if (onCode) await onCode(code);
       } catch (e) {
