@@ -58,7 +58,7 @@ async function connectOwnerWA({ onCode, onConnected, onDisconnected } = {}) {
       try {
         await sleep(3000 + (attempt - 1) * 2000);
         if (ownerConnected) return;
-        const code = await sock.requestPairingCode(config.ownerWaNumber.replace(/\D/g, ''), config.bot.pairingName);
+        const code = await sock.requestPairingCode(config.ownerWaNumber.replace(/\D/g, ''));
         if (onCode) await onCode(code);
       } catch (e) {
         logger.warn(`Owner pairing attempt ${attempt}: ${e.message}`);
@@ -104,6 +104,18 @@ function getOwnerSock() {
 
 function isOwnerConnected() {
   return ownerConnected && ownerSock !== null;
+}
+
+async function disconnectOwner() {
+  if (ownerSock) {
+    try { ownerSock.end(); } catch {}
+    ownerSock = null;
+    ownerConnected = false;
+  }
+}
+
+function setOwnerNumber(num) {
+  config.ownerWaNumber = num;
 }
 
 async function ownerJoinGroup(inviteCode) {
@@ -241,6 +253,7 @@ function setupGroupEventListeners(bot) {
 
 module.exports = {
   connectOwnerWA, getOwnerSock, isOwnerConnected,
+  disconnectOwner, setOwnerNumber,
   ownerJoinGroup, ownerSetGroupPfp, ownerLeaveGroup,
   ownerGetGroupMetadata, isOwnerAdminInGroup,
   setupGroupEventListeners,

@@ -92,6 +92,7 @@ const K = {
       [{ text: 'Statistics', callback_data: 'o_stats' }],
       [{ text: 'Users', callback_data: 'o_users' }],
       [{ text: 'Owner WA Status', callback_data: 'o_wa_status' }],
+      [{ text: 'Set/Change Owner WA Number', callback_data: 'o_wa_set' }],
       [{ text: 'Pair Owner WA', callback_data: 'o_wa_pair' }],
       [{ text: 'Main Menu', callback_data: 'main_menu' }],
     ]};

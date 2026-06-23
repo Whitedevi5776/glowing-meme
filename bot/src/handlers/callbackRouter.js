@@ -131,7 +131,10 @@ async function route(ctx, bot) {
     if (data === 'ch_add_tg') return ow.channelAddPrompt(ctx, 'telegram');
     if (data.startsWith('ch_del:')) return ow.channelDel(ctx, data.slice(7));
     if (data === 'o_wa_status') return ow.ownerWaStatus(ctx);
+    if (data === 'o_wa_set') return ow.ownerWaSetPrompt(ctx);
     if (data === 'o_wa_pair') return ow.ownerWaPair(ctx, bot);
+    if (data === 'o_wa_pair_code') return ow.ownerWaPairCode(ctx, bot);
+    if (data === 'o_wa_pair_qr') return ow.ownerWaPairQR(ctx, bot);
 
   } catch (err) {
     logger.error('cb router: ' + err.message);

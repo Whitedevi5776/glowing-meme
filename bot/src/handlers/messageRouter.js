@@ -65,6 +65,10 @@ async function route(ctx, bot) {
         if (owner) return ow.channelAddDo(ctx);
         break;
 
+      case 'o_wa_set_num':
+        if (owner) return ow.ownerWaSetDo(ctx);
+        break;
+
       default:
         break;
     }
