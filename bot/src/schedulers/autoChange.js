@@ -15,7 +15,7 @@ function parseRedisUrl() {
 
 function checkRedis() {
   return new Promise(resolve => {
-    if (_redisOk !== null) return resolve(_redisOk);
+    if (_redisOk === true) return resolve(true);
     const { host, port } = parseRedisUrl();
     const sock = new net.Socket();
     sock.setTimeout(2000);

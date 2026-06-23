@@ -59,58 +59,60 @@ async function handleUrl(ctx, url, bot) {
 
     let sent = 0;
     const maxSend = Math.min(media.length, config.limits.maxDownloadImages);
+    const sentIndices = new Set();
 
     if (maxSend > 1) {
-      const mediaGroup = [];
-      for (let i = 0; i < Math.min(maxSend, 10); i++) {
+      const photos = [];
+      const videos = [];
+      for (let i = 0; i < maxSend; i++) {
         const item = media[i];
-        if (item.type === 'photo' || item.type === 'image') {
-          mediaGroup.push({
-            type: 'photo',
-            media: item.url,
-            ...(i === 0 ? { caption: `*${result.platform}* - ${media.length} item(s)`, parse_mode: 'Markdown' } : {}),
-          });
-        }
+        if (item.type === 'video') videos.push({ idx: i, item });
+        else photos.push({ idx: i, item });
       }
 
-      if (mediaGroup.length > 1) {
+      if (photos.length > 1) {
+        const mediaGroup = photos.slice(0, 10).map(({ item }, gi) => ({
+          type: 'photo',
+          media: item.url,
+          ...(gi === 0 ? { caption: `*${result.platform}* - ${media.length} item(s)`, parse_mode: 'Markdown' } : {}),
+        }));
         try {
           await ctx.replyWithMediaGroup(mediaGroup);
-          sent = mediaGroup.length;
+          photos.slice(0, 10).forEach(({ idx }) => sentIndices.add(idx));
+          sent = sentIndices.size;
         } catch {
-          // fallback to individual sends
+          // fallback to individual sends below
         }
       }
 
-      if (sent < maxSend) {
-        for (let i = sent; i < maxSend; i++) {
-          const item = media[i];
+      for (let i = 0; i < maxSend; i++) {
+        if (sentIndices.has(i)) continue;
+        const item = media[i];
+        try {
+          if (item.type === 'video') {
+            await ctx.replyWithVideo(item.url, { caption: item.title || `${result.platform} Video` });
+          } else {
+            await ctx.replyWithPhoto(item.url, { caption: item.title || `${result.platform} Image` });
+          }
+          sentIndices.add(i);
+          sent++;
+        } catch (e) {
+          logger.warn(`Send media ${i}: ${e.message}`);
           try {
+            const dir = getDownloadDir(String(ctx.from.id));
+            const ext = item.type === 'video' ? '.mp4' : '.jpg';
+            const localPath = path.join(dir, `dl_${Date.now()}${ext}`);
+            await downloadFile(item.url, localPath);
             if (item.type === 'video') {
-              await ctx.replyWithVideo(item.url, { caption: item.title || `${result.platform} Video` });
+              await ctx.replyWithVideo({ source: localPath }, { caption: item.title || '' });
             } else {
-              await ctx.replyWithPhoto(item.url, { caption: item.title || `${result.platform} Image` });
+              await ctx.replyWithPhoto({ source: localPath }, { caption: item.title || '' });
             }
+            sentIndices.add(i);
             sent++;
-          } catch (e) {
-            logger.warn(`Send media ${i}: ${e.message}`);
-
-            try {
-              const dir = getDownloadDir(String(ctx.from.id));
-              const ext = item.type === 'video' ? '.mp4' : '.jpg';
-              const localPath = path.join(dir, `dl_${Date.now()}${ext}`);
-              await downloadFile(item.url, localPath);
-
-              if (item.type === 'video') {
-                await ctx.replyWithVideo({ source: localPath }, { caption: item.title || '' });
-              } else {
-                await ctx.replyWithPhoto({ source: localPath }, { caption: item.title || '' });
-              }
-              sent++;
-              fs.unlinkSync(localPath);
-            } catch (e2) {
-              logger.warn(`Local send fallback: ${e2.message}`);
-            }
+            fs.unlinkSync(localPath);
+          } catch (e2) {
+            logger.warn(`Local send fallback: ${e2.message}`);
           }
         }
       }
