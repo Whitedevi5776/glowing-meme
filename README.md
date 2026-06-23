@@ -18,7 +18,7 @@ A production-ready Telegram bot for WhatsApp profile picture management, group P
 
 ## Requirements
 
-- Node.js 18+
+- Node.js 20+
 - MongoDB (local or remote)
 - Redis (for auto-change scheduler, optional)
 
