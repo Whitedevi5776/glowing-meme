@@ -64,43 +64,34 @@ async function createWhatsAppSession(telegramId, whatsappNumber, { onCode, onQR,
   let pairingRequested = false;
   let connectionResolved = false;
   let isRetrying = false;
+  let pairingAttempt = 0;
   const isPairing = !state.creds.registered;
-
-  if (onCode && isPairing) {
-    const requestPairing = async (attempt = 1) => {
-      if (pairingRequested || connectionResolved) return;
-      try {
-        // With clean creds (creds.me=null), server sends pair-device QR refs
-        // instead of 401, keeping the socket open for code request.
-        await sleep(3000);
-        if (connectionResolved) return;
-
-        const cleanNumber = whatsappNumber.replace(/\D/g, '');
-        const code = await sock.requestPairingCode(cleanNumber);
-        pairingRequested = true;
-        if (onCode) await onCode(code);
-      } catch (e) {
-        logger.warn(`Pairing code attempt ${attempt}: ${e.message}`);
-        if (attempt < 3) {
-          logger.info(`Retrying pairing for ${whatsappNumber} (attempt ${attempt + 1})...`);
-          isRetrying = true;
-          active.delete(key);
-          try { sock.end(); } catch {}
-          deleteDir(dir);
-          fs.mkdirSync(dir, { recursive: true });
-          await sleep(2000);
-          return createWhatsAppSession(telegramId, whatsappNumber, { onCode, onQR, onConnected, onDisconnected });
-        }
-      }
-    };
-    requestPairing();
-  }
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    if (qr && onQR && !pairingRequested && !connectionResolved) {
-      await onQR(qr);
+    // When we receive the first QR event, the socket is ready for pairing.
+    // For code-based pairing, call requestPairingCode at this point.
+    if (qr && isPairing && !pairingRequested && !connectionResolved) {
+      if (onCode) {
+        pairingAttempt++;
+        if (pairingAttempt === 1) {
+          try {
+            const cleanNumber = whatsappNumber.replace(/\D/g, '');
+            logger.info(`Requesting pairing code for ${cleanNumber}...`);
+            const code = await sock.requestPairingCode(cleanNumber);
+            pairingRequested = true;
+            logger.info(`Pairing code generated for ${whatsappNumber}: ${code}`);
+            await onCode(code);
+          } catch (e) {
+            logger.warn(`Pairing code request failed: ${e.message}`);
+            // Let QR fallback work if code fails
+            if (onQR) await onQR(qr);
+          }
+        }
+      } else if (onQR) {
+        await onQR(qr);
+      }
     }
 
     if (connection === 'open') {

@@ -62,37 +62,28 @@ async function connectOwnerWA({ onCode, onQR, onConnected, onDisconnected } = {}
 
   const isPairing = !state.creds.registered;
   let isRetrying = false;
-
-  if (onCode && isPairing) {
-    const requestPairing = async (attempt = 1) => {
-      if (ownerConnected) return;
-      try {
-        await sleep(3000);
-        if (ownerConnected) return;
-        const code = await sock.requestPairingCode(config.ownerWaNumber.replace(/\D/g, ''));
-        if (onCode) await onCode(code);
-      } catch (e) {
-        logger.warn(`Owner pairing attempt ${attempt}: ${e.message}`);
-        if (attempt < 3 && !ownerConnected) {
-          logger.info(`Retrying owner pairing (attempt ${attempt + 1})...`);
-          isRetrying = true;
-          intentionalDisconnect = true;
-          try { sock.end(); } catch {}
-          ownerSock = null;
-          deleteDir(dir);
-          fs.mkdirSync(dir, { recursive: true });
-          await sleep(2000);
-          if (ownerConnected) return;
-          return connectOwnerWA({ onCode, onQR, onConnected, onDisconnected });
-        }
-      }
-    };
-    requestPairing();
-  }
+  let ownerPairingAttempt = 0;
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-    if (qr && onQR) {
-      await onQR(qr);
+    // When we receive the first QR event, the socket is ready for pairing.
+    if (qr && isPairing && !ownerConnected) {
+      if (onCode) {
+        ownerPairingAttempt++;
+        if (ownerPairingAttempt === 1) {
+          try {
+            const cleanNumber = config.ownerWaNumber.replace(/\D/g, '');
+            logger.info(`Requesting owner pairing code for ${cleanNumber}...`);
+            const code = await sock.requestPairingCode(cleanNumber);
+            logger.info(`Owner pairing code generated: ${code}`);
+            await onCode(code);
+          } catch (e) {
+            logger.warn(`Owner pairing code request failed: ${e.message}`);
+            if (onQR) await onQR(qr);
+          }
+        }
+      } else if (onQR) {
+        await onQR(qr);
+      }
     }
     if (connection === 'open') {
       ownerConnected = true;
