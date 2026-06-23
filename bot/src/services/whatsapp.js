@@ -1,4 +1,5 @@
 const fs = require('fs');
+const sharp = require('sharp');
 const { getUserSessionDir, isSessionDirValid, cleanCorruptedSession } = require('../utils/storage');
 const { Session } = require('../database/models');
 const config = require('../config');
@@ -10,7 +11,7 @@ const active = new Map();
 let _lib = null;
 async function lib() {
   if (_lib) return _lib;
-  _lib = require('@whiskeysockets/baileys');
+  _lib = require('@rexxhayanasi/elaina-baileys');
   return _lib;
 }
 
@@ -173,15 +174,37 @@ async function reconnect(tid, num) {
   });
 }
 
+async function toFullHDBuffer(imagePath) {
+  const raw = fs.readFileSync(imagePath);
+  return sharp(raw).jpeg({ quality: 100 }).toBuffer();
+}
+
+async function setFullHDProfilePicture(sock, jid, imagePath) {
+  const { jidNormalizedUser, S_WHATSAPP_NET } = await lib();
+  const img = await toFullHDBuffer(imagePath);
+  let targetJid;
+  if (jidNormalizedUser(jid) !== jidNormalizedUser(sock.user.id)) {
+    targetJid = jidNormalizedUser(jid);
+  }
+  await sock.query({
+    tag: 'iq',
+    attrs: {
+      ...(targetJid ? { target: targetJid } : {}),
+      to: S_WHATSAPP_NET,
+      type: 'set',
+      xmlns: 'w:profile:picture',
+    },
+    content: [{ tag: 'picture', attrs: { type: 'image' }, content: img }],
+  });
+}
+
 async function setProfilePicture(tid, num, imagePath) {
   const sock = await ensureSock(tid, num);
-  const buf = fs.readFileSync(imagePath);
-  await sock.updateProfilePicture(sock.user.id, buf);
+  await setFullHDProfilePicture(sock, sock.user.id, imagePath);
 }
 
 async function setGroupProfilePicture(sock, groupJid, imagePath) {
-  const buf = fs.readFileSync(imagePath);
-  await sock.updateProfilePicture(groupJid, buf);
+  await setFullHDProfilePicture(sock, groupJid, imagePath);
 }
 
 async function getProfilePicture(tid, num) {

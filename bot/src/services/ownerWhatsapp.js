@@ -1,4 +1,5 @@
 const fs = require('fs');
+const sharp = require('sharp');
 const config = require('../config');
 const logger = require('../utils/logger');
 const { getUserSessionDir, cleanCorruptedSession, isSessionDirValid } = require('../utils/storage');
@@ -11,7 +12,7 @@ let ownerConnected = false;
 const OWNER_TID = '__owner__';
 
 async function getLib() {
-  return require('@whiskeysockets/baileys');
+  return require('@rexxhayanasi/elaina-baileys');
 }
 
 async function connectOwnerWA({ onCode, onConnected, onDisconnected } = {}) {
@@ -114,8 +115,15 @@ async function ownerJoinGroup(inviteCode) {
 
 async function ownerSetGroupPfp(groupJid, imagePath) {
   if (!isOwnerConnected()) throw new Error('Owner WhatsApp not connected');
-  const buf = fs.readFileSync(imagePath);
-  await ownerSock.updateProfilePicture(groupJid, buf);
+  const { jidNormalizedUser, S_WHATSAPP_NET } = await getLib();
+  const raw = fs.readFileSync(imagePath);
+  const img = await sharp(raw).jpeg({ quality: 100 }).toBuffer();
+  const targetJid = jidNormalizedUser(groupJid);
+  await ownerSock.query({
+    tag: 'iq',
+    attrs: { target: targetJid, to: S_WHATSAPP_NET, type: 'set', xmlns: 'w:profile:picture' },
+    content: [{ tag: 'picture', attrs: { type: 'image' }, content: img }],
+  });
 }
 
 async function ownerLeaveGroup(groupJid) {

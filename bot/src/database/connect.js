@@ -16,15 +16,16 @@ async function connectDB() {
       logger.info(`MongoDB connected -> ${uri}`);
       return;
     } catch {
-      logger.warn('Local MongoDB not found - starting in-memory MongoDB...');
+      logger.warn('Local MongoDB not found - trying in-memory fallback...');
       try {
         const { MongoMemoryServer } = require('mongodb-memory-server');
         const mongod = await MongoMemoryServer.create();
         uri = mongod.getUri();
         logger.info('In-memory MongoDB started (data resets on restart)');
+        logger.warn('Install mongodb-memory-server (npm install mongodb-memory-server) for this fallback.');
       } catch (e) {
-        logger.error('Could not start in-memory MongoDB: ' + e.message);
-        logger.error('Set MONGODB_URI in .env to a real MongoDB instance.');
+        logger.error('MongoDB connection failed and in-memory fallback unavailable.');
+        logger.error('Set MONGODB_URI in .env to a real MongoDB instance, or install mongodb-memory-server for dev.');
         process.exit(1);
       }
     }
